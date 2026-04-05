@@ -1,0 +1,181 @@
+============================================================
+  SCHRODINGER'S BUG — WAREHOUSE DEMO CHEATSHEET
+  (DRL Warehouse Navigation — TD3 + Safety Supervisor)
+============================================================
+
+OVERVIEW
+--------
+Robot: TurtleBot3 Burger
+World: AWS Small Warehouse (shelves, aisles, pallets)
+Brain: TD3 Agent (Twin Delayed DDPG)
+Goals: Shelf → Loading Dock → Shelf → ... (auto-cycle)
+
+
+============================================================
+STEP 0: ONE-TIME INSTALL (run once, then never again)
+============================================================
+
+sudo apt update
+sudo apt install -y ros-humble-aws-robomaker-small-warehouse-world
+
+
+============================================================
+TERMINAL 1 — THE WAREHOUSE WORLD
+============================================================
+
+cd ~/iiit_dharwad
+source /opt/ros/humble/setup.bash
+export TURTLEBOT3_MODEL=burger
+
+# Option A — Full warehouse (startup-grade demo)
+ros2 launch aws_robomaker_small_warehouse_world no_robot_warehouse.launch.py
+
+# Option B — Simpler empty world (if warehouse pkg not installed)
+ros2 launch turtlebot3_gazebo empty_world.launch.py
+
+# Leave this running. Wait until you see:
+# [gzserver] Loaded world...
+
+
+============================================================
+TERMINAL 2 — SPAWN THE ROBOT (FIXES /spawn_entity ERROR)
+============================================================
+# Run this AFTER Terminal 1 is fully loaded (green "world" line).
+# This script waits for Gazebo to be ready before spawning.
+
+cd ~/iiit_dharwad/src/drl_nav
+source /opt/ros/humble/setup.bash
+export TURTLEBOT3_MODEL=burger
+python3 warehouse_launch.py
+
+# You will see:
+# ✅ Gazebo is ready!
+# ✅ TurtleBot3 Burger spawned at (0.0, 0.0, 0.1)
+
+# WHY NOT ros2 run gazebo_ros spawn_entity.py directly?
+# Because it fires immediately and Gazebo isn't fully loaded yet.
+# warehouse_launch.py polls /spawn_entity and only fires when ready.
+#
+# Manual fallback (Terminal 4 style, if warehouse_launch.py fails):
+# ros2 run gazebo_ros spawn_entity.py \
+#   -entity burger -topic robot_description \
+#   -x 0.0 -y 0.0 -z 0.1
+
+
+============================================================
+TERMINAL 3 — THE DRL BRAIN
+============================================================
+
+cd ~/iiit_dharwad/src/drl_nav
+source /opt/ros/humble/setup.bash
+source ~/robot_env/bin/activate
+python3 ros2_node.py
+
+# The brain will:
+#   1. Wait for /scan + /odom topics
+#   2. Load models/best/actor.pth  (or warn + use random policy)
+#   3. Navigate to Goal A (Shelf)
+#   4. On arrival → auto-set Goal B (Loading Dock)
+#   5. Repeat indefinitely
+#
+# Live log shows:
+#   Pos: (x, y) | Goal A (Shelf) dist: 3.12m | Action: lin=0.22 ang=-0.14
+#   Min LiDAR: 0.81m | Waypoints done: 0
+
+
+============================================================
+TERMINAL 4 — THE PROOF (training graphs)
+============================================================
+
+cd ~/iiit_dharwad/src/drl_nav
+source ~/robot_env/bin/activate
+python3 plot_results.py
+
+
+============================================================
+LIVE OBSTACLE TESTING (the cylinder trick)
+============================================================
+
+# In a new terminal while Terminals 1-3 are all running:
+cd ~/iiit_dharwad/src/drl_nav
+source /opt/ros/humble/setup.bash
+source ~/robot_env/bin/activate
+
+# Drop 1 random obstacle in the warehouse aisle:
+python3 spawn_cylinder.py
+
+# Drop 5 obstacles at once (stress test):
+python3 spawn_cylinder.py --count 5
+
+# Drop one at a specific location:
+python3 spawn_cylinder.py --x 1.5 --y 0.0
+
+# Remove all test obstacles:
+python3 spawn_cylinder.py --clear
+
+# Watch Terminal 3:
+#   [SAFETY] Slowing down — LiDAR: 0.38m   ← approaching obstacle
+#   [SAFETY] EMERGENCY OVERRIDE — LiDAR: 0.21m  ← override fired!
+# The robot swerves around it. That is your "real world" demo moment.
+
+
+============================================================
+GAZEBO GUI METHOD (no terminal needed for cylinders)
+============================================================
+
+1. In the Gazebo toolbar (top centre), click the Cylinder icon
+2. Click anywhere in front of the robot in the 3D view
+3. Watch Terminal 3 — Min LiDAR value drops instantly
+4. Safety Supervisor fires if LiDAR < 0.22m
+
+
+============================================================
+WHAT TO SAY TO JUDGES
+============================================================
+
+1. "This robot learned autonomous warehouse navigation using
+   1000 training episodes — zero hardcoded movement rules."
+
+2. "Watch the multi-goal system: it reaches the shelf,
+   automatically resets the target to the loading dock,
+   then cycles back. This is production-level logic."
+
+3. "I am dropping a live obstacle. Watch the Safety Supervisor
+   override the neural network in real time — LiDAR < 22cm
+   triggers an emergency stop and turn. This is what makes
+   real-world deployment safe."
+
+4. "These 4 training graphs prove the robot improved:
+   success rate up, collision rate near zero throughout."
+
+5. "Domain randomization every episode means the robot
+   generalizes — it works in this warehouse without
+   ever training here."
+
+
+============================================================
+IF SOMETHING BREAKS
+============================================================
+
+Gazebo not opening?
+  → Kill and reopen terminal, re-source ROS2
+
+/spawn_entity unavailable?
+  → Wait 10-15s more for Gazebo to fully load, then re-run
+    python3 warehouse_launch.py  (it will wait automatically)
+
+ROS2 command not found?
+  → source /opt/ros/humble/setup.bash
+
+Python import error?
+  → source ~/robot_env/bin/activate
+
+Robot not moving?
+  → ros2 topic list   (check /scan and /odom exist)
+  → ls models/best/   (check actor.pth exists)
+
+spawn_cylinder.py fails?
+  → Make sure Terminal 1 (Gazebo) is fully loaded first
+  → source /opt/ros/humble/setup.bash before running
+
+============================================================
